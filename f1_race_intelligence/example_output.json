@@ -1,0 +1,136 @@
+{
+  "id": "brief_example_001",
+  "document_id": "doc_example_001",
+  "generated_at": "2024-01-27T12:00:00",
+  "executive_summary": "The Monaco Grand Prix 2023 was decided by strategic pit stop timing and effective tire management. Max Verstappen demonstrated superior pace, particularly in the high-speed sectors, while maintaining consistency throughout the race. The race featured two distinct phases: an aggressive opening stint with soft tires, followed by a strategic hard compound stint that proved advantageous. Weather remained stable throughout, allowing teams to execute planned strategies without major disruptions.",
+  "key_points": [
+    "Verstappen dominated in Sectors 2 and 3 throughout the race",
+    "Early pit stop window (laps 20-25) created strategic advantage for Red Bull",
+    "Hard tire compound showed superior degradation profile in final stint",
+    "Mercedes' hard compound choice in second stint struggled with grip management",
+    "Safety car windows did not significantly impact race outcome"
+  ],
+  "extracted_claims": [
+    {
+      "id": "claim_001",
+      "claim_text": "Verstappen maintained consistent pace in the second stint on hard tires",
+      "claim_type": "pace",
+      "confidence": 0.92,
+      "status": "supported",
+      "entities": {
+        "drivers": ["Max Verstappen"],
+        "teams": ["Red Bull Racing"],
+        "keywords": ["pace", "hard tires", "consistency"]
+      },
+      "time_scope": {
+        "lap_start": 23,
+        "lap_end": 58
+      },
+      "evidence": [
+        {
+          "source": "openf1_laps",
+          "relevance_score": 0.95,
+          "interpretation": "Lap times show consistent performance within 0.2s variation during hard compound stint"
+        }
+      ],
+      "rationale": "Telemetry and lap time data confirm minimal variation in sector times after tire drop-off period"
+    },
+    {
+      "id": "claim_002",
+      "claim_text": "Strategic pit stop on lap 22 gained Verstappen track position advantage",
+      "claim_type": "strategy",
+      "confidence": 0.88,
+      "status": "supported",
+      "entities": {
+        "drivers": ["Max Verstappen"],
+        "teams": ["Red Bull Racing"],
+        "keywords": ["pit stop", "strategy", "track position"]
+      },
+      "time_scope": {
+        "lap_start": 22,
+        "lap_end": 22
+      },
+      "evidence": [
+        {
+          "source": "openf1_pit_stops",
+          "relevance_score": 0.90,
+          "interpretation": "Pit stop data shows early pit window execution with 2.3s stop duration"
+        }
+      ],
+      "rationale": "Pit stop timing aligned with window predictions and resulted in cleaner track for the restart"
+    },
+    {
+      "id": "claim_003",
+      "claim_text": "Tire degradation on soft compound exceeded 20 laps in the opening phase",
+      "claim_type": "tyres",
+      "confidence": 0.75,
+      "status": "unclear",
+      "entities": {
+        "teams": ["Multiple"],
+        "keywords": ["soft tires", "degradation"]
+      },
+      "time_scope": {
+        "lap_start": 1,
+        "lap_end": 22
+      },
+      "evidence": [
+        {
+          "source": "openf1_stints",
+          "relevance_score": 0.80,
+          "interpretation": "Stint data shows 22 laps on soft compound with gradual pace drop-off"
+        }
+      ],
+      "rationale": "Data shows soft compound manageable until lap 18-20; claims of >20 lap viability unclear"
+    }
+  ],
+  "timeline": [
+    {
+      "lap": 1,
+      "event": "Race start - Verstappen takes early advantage in turn 1",
+      "source": "pdf",
+      "affected_drivers": ["Max Verstappen", "Lewis Hamilton"]
+    },
+    {
+      "lap": 18,
+      "event": "Minor incident at Turn 6 (Portier), no safety car required",
+      "source": "pdf",
+      "affected_drivers": ["Multiple"]
+    },
+    {
+      "lap": 22,
+      "event": "Red Bull pit stop for Verstappen - soft to hard tires",
+      "source": "openf1",
+      "affected_drivers": ["Max Verstappen"]
+    },
+    {
+      "lap": 24,
+      "event": "Mercedes pit stop for Hamilton - soft to hard tires",
+      "source": "openf1",
+      "affected_drivers": ["Lewis Hamilton"]
+    },
+    {
+      "lap": 45,
+      "event": "Brief spin incident, driver recovered without damage",
+      "source": "pdf",
+      "affected_drivers": ["Other"]
+    }
+  ],
+  "follow_up_questions": [
+    "How did the alternative strategy of a longer first stint affect the race outcome?",
+    "What was the specific radio communication between driver and engineer regarding tire management?",
+    "How much did track temperature changes influence tire degradation predictions?",
+    "Could a two-stop strategy have provided any benefit in this configuration?",
+    "What was the impact of DRS effectiveness on the final race positions?"
+  ],
+  "session_info": {
+    "year": 2023,
+    "gp_name": "Monaco Grand Prix",
+    "session_type": "RACE"
+  },
+  "claim_stats": {
+    "total": 3,
+    "supported": 2,
+    "unclear": 1,
+    "contradicted": 0
+  }
+}
