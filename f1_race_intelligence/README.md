@@ -284,6 +284,49 @@ streamlit run app.py
 
 **No API keys needed!** Everything runs locally with Ollama.
 
+## 🆕 OpenF1 Event Extraction (Enhanced Timeline)
+
+**NEW FEATURE:** The timeline explorer now shows comprehensive race events from OpenF1, not just pit stops!
+
+### Event Types Now Supported
+
+The timeline automatically extracts and categorizes:
+
+- 🛞 **Pit Stops** - All driver pit stop events with compounds
+- 🚗 **Safety Cars** - Full safety car deployments  
+- 🏁 **Virtual Safety Cars** - Yellow flag conditions
+- 🟨 **Yellow Flags** - Incidents and hazards
+- 🔴 **Red Flags** - Session stoppages
+- ⛈️ **Weather Events** - Track condition changes
+- 💥 **Incidents** - Crashes, collisions, investigations
+- 📊 **Pace Changes** - Notable lap time shifts
+
+### How to Use
+
+1. Go to **Build Timeline** tab
+2. Select year and race (e.g., 2024 Bahrain)
+3. Click **"Reconstruct Timeline (OpenF1 Only)"**
+4. Go to **Timeline Explorer** tab
+5. View timeline table with diverse event types
+6. Filter by event type, driver, or evidence source
+
+### Features
+
+- **Event Breakdown Display**: Debug panel shows count of each event type
+- **Missing Flag Detection**: Warns if expected event types are absent
+- **Real OpenF1 Evidence**: Every event linked to original race control messages
+- **Smart Filtering**: Filter by event type, driver, or evidence source
+
+### Documentation
+
+For detailed information:
+- **User Guide:** [OPENF1_EVENT_EXTRACTION_GUIDE.md](OPENF1_EVENT_EXTRACTION_GUIDE.md)
+- **Event Reference:** [EVENT_TYPES_REFERENCE.md](EVENT_TYPES_REFERENCE.md)
+- **Technical Details:** [OPENF1_EVENT_EXTRACTION_COMPLETE.md](OPENF1_EVENT_EXTRACTION_COMPLETE.md)
+- **Implementation Docs:** [DOCUMENTATION_INDEX.md](DOCUMENTATION_INDEX.md)
+
+---
+
 ## Race Intelligence Brief Output
 
 ```json

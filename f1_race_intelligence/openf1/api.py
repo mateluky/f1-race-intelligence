@@ -3,6 +3,7 @@
 import logging
 import json
 import time
+import re
 from abc import ABC, abstractmethod
 from typing import Optional, Dict, List, Any
 from datetime import datetime, timedelta
@@ -190,7 +191,7 @@ class OpenF1Client(OpenF1ClientInterface):
 
     def __init__(
         self,
-        base_url: str = "https://api.openf1.org",
+        base_url: str = "https://api.openf1.org/v1",
         cache_timeout_hours: int = 24,
         retry_max_attempts: int = 3,
         retry_backoff_factor: float = 1.5,
@@ -198,7 +199,7 @@ class OpenF1Client(OpenF1ClientInterface):
         """Initialize OpenF1 client.
         
         Args:
-            base_url: Base URL for OpenF1 API
+            base_url: Base URL for OpenF1 API (default: https://api.openf1.org/v1)
             cache_timeout_hours: Cache timeout in hours
             retry_max_attempts: Max retry attempts for failed requests
             retry_backoff_factor: Backoff factor for retries
@@ -280,36 +281,129 @@ class OpenF1Client(OpenF1ClientInterface):
         gp_name: Optional[str] = None,
         session_type: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        """Search for sessions."""
-        try:
-            params = {"year": year}
-            if gp_name:
-                params["gp_name"] = gp_name
-            if session_type:
-                params["session_type"] = session_type
+        """Search for sessions by year and optional filters.
+        
+        Uses multi-query fallback strategy:
+        1. Try exact GP name match against location/country_name
+        2. Try GP name without "Grand Prix"
+        3. Try country-based tokens
+        4. Return all RACE sessions for year if no filters
+        
+        Args:
+            year: F1 season year (e.g., 2024)
+            gp_name: Grand Prix name (e.g., "Australian Grand Prix", "Monaco")
+            session_type: Session type (RACE, QUALI, FP1, FP2, FP3) - API uses "Race", "Qualifying", etc.
             
-            data = self._request("sessions", params)
-            # API might return single object or list
-            if isinstance(data, list):
-                return data
-            elif isinstance(data, dict):
-                return [data]
-            else:
+        Returns:
+            List of session objects matching criteria
+        """
+        try:
+            # Query all sessions for the year
+            params = {"year": year}
+            all_sessions = self._request("sessions", params)
+            
+            if not all_sessions:
+                logger.warning(f"No sessions found for year {year}")
                 return []
+            
+            # Convert to list if needed
+            sessions = all_sessions if isinstance(all_sessions, list) else [all_sessions]
+            
+            logger.debug(f"Total sessions for {year}: {len(sessions)}")
+            
+            # Normalize session_type if provided (API uses "Race", "Qualifying", "Practice", etc.)
+            if session_type:
+                session_type_normalized = session_type.lower()
+                if session_type_normalized in ["race", "qualifying", "sprint", "practice"]:
+                    # Capitalize first letter to match API format: "Race", "Qualifying", etc.
+                    session_type_normalized = session_type_normalized.capitalize()
+                # Also handle "FP1", "FP2", "FP3" -> might not exist in all years
+                logger.debug(f"Normalized session_type: {session_type} -> {session_type_normalized}")
+            
+            # Filter by gp_name if provided (case-insensitive, with fallback queries)
+            if gp_name and gp_name.lower() != "unknown":
+                gp_lower = gp_name.lower()
+                
+                # Build list of query tokens to try (in priority order)
+                query_tokens = []
+                
+                # Token 1: Full GP name (e.g., "Australian Grand Prix" or "Bahrain")
+                query_tokens.append(gp_lower)
+                
+                # Token 2: GP name without "Grand Prix" (e.g., "Australian" from "Australian Grand Prix")
+                without_gp = gp_lower.replace(" grand prix", "").replace("grand prix", "").strip()
+                if without_gp and without_gp != gp_lower:
+                    query_tokens.append(without_gp)
+                
+                # Token 3: Country name variations
+                # Extract country from "X Grand Prix" -> "X"
+                import re
+                gp_match = re.search(r'^(\w+(?:\s+\w+)?)', gp_lower)
+                if gp_match:
+                    country_token = gp_match.group(1).strip()
+                    if country_token and country_token != gp_lower:
+                        query_tokens.append(country_token)
+                
+                # Try each query token in order
+                filtered_sessions = None
+                matched_query = None
+                
+                for query_token in query_tokens:
+                    candidate_sessions = [
+                        s for s in sessions
+                        if query_token in s.get("location", "").lower()
+                        or query_token in s.get("country_name", "").lower()
+                        or query_token in s.get("circuit_short_name", "").lower()
+                    ]
+                    
+                    if candidate_sessions:
+                        filtered_sessions = candidate_sessions
+                        matched_query = query_token
+                        logger.debug(f"GP name match: '{gp_name}' matched token '{query_token}' ({len(candidate_sessions)} sessions)")
+                        break
+                
+                if filtered_sessions:
+                    sessions = filtered_sessions
+                else:
+                    # Log what we got instead
+                    available = list(set([s.get("location", "N/A") for s in sessions[:10]]))
+                    logger.warning(f"No sessions found for GP '{gp_name}'. Available locations: {available}")
+            
+            # Filter by session_type if provided (API format: "Race", "Qualifying", "Practice", etc.)
+            if session_type:
+                session_type_normalized = session_type.lower().capitalize()
+                sessions = [
+                    s for s in sessions
+                    if s.get("session_type", "").lower() == session_type_normalized.lower()
+                ]
+                logger.debug(f"Filtered to {len(sessions)} sessions with type {session_type_normalized}")
+            
+            logger.info(f"Found {len(sessions)} sessions for {year} {gp_name or 'all'} {session_type or 'all'}")
+            return sessions
+        
         except Exception as e:
             logger.error(f"Error searching sessions: {e}")
             return []
 
     def get_race_control_messages(self, session_id: str) -> List[Dict[str, Any]]:
-        """Get race control messages."""
+        """Get race control messages.
+        
+        Args:
+            session_id: Session key (from OpenF1 API - called "session_key" in responses)
+        """
         try:
-            data = self._request("race_control", {"session_key": session_id})
+            # OpenF1 API uses "session_key" parameter
+            params = {"session_key": session_id}
+            data = self._request("race_control", params)
             if isinstance(data, list):
                 return data
+            elif isinstance(data, dict) and data:
+                return [data]
             else:
-                return [data] if data else []
+                logger.debug(f"No race control messages for session {session_id}")
+                return []
         except Exception as e:
-            logger.error(f"Error getting race control messages: {e}")
+            logger.warning(f"Error getting race control messages for {session_id}: {e}")
             return []
 
     def get_laps(
@@ -319,17 +413,21 @@ class OpenF1Client(OpenF1ClientInterface):
     ) -> List[Dict[str, Any]]:
         """Get lap times."""
         try:
-            params = {"session_key": session_id}
+            # Use session_id parameter (not session_key)
+            params = {"session_id": session_id}
             if driver_number:
                 params["driver_number"] = driver_number
             
             data = self._request("laps", params)
             if isinstance(data, list):
                 return data
+            elif isinstance(data, dict) and data:
+                return [data]
             else:
-                return [data] if data else []
+                logger.debug(f"No laps found for session {session_id}")
+                return []
         except Exception as e:
-            logger.error(f"Error getting laps: {e}")
+            logger.warning(f"Error getting laps for {session_id}: {e}")
             return []
 
     def get_stints(
@@ -339,6 +437,7 @@ class OpenF1Client(OpenF1ClientInterface):
     ) -> List[Dict[str, Any]]:
         """Get stint data."""
         try:
+            # OpenF1 API uses "session_key" parameter
             params = {"session_key": session_id}
             if driver_number:
                 params["driver_number"] = driver_number
@@ -346,10 +445,13 @@ class OpenF1Client(OpenF1ClientInterface):
             data = self._request("stints", params)
             if isinstance(data, list):
                 return data
+            elif isinstance(data, dict) and data:
+                return [data]
             else:
-                return [data] if data else []
+                logger.debug(f"No stints for session {session_id}")
+                return []
         except Exception as e:
-            logger.error(f"Error getting stints: {e}")
+            logger.warning(f"Error getting stints for {session_id}: {e}")
             return []
 
     def get_pit_stops(
@@ -359,6 +461,7 @@ class OpenF1Client(OpenF1ClientInterface):
     ) -> List[Dict[str, Any]]:
         """Get pit stop data."""
         try:
+            # OpenF1 API uses "session_key" parameter
             params = {"session_key": session_id}
             if driver_number:
                 params["driver_number"] = driver_number
@@ -366,10 +469,13 @@ class OpenF1Client(OpenF1ClientInterface):
             data = self._request("pit_stops", params)
             if isinstance(data, list):
                 return data
+            elif isinstance(data, dict) and data:
+                return [data]
             else:
-                return [data] if data else []
+                logger.debug(f"No pit stops for session {session_id}")
+                return []
         except Exception as e:
-            logger.error(f"Error getting pit stops: {e}")
+            logger.warning(f"Error getting pit stops for {session_id}: {e}")
             return []
 
 

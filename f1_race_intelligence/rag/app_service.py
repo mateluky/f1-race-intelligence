@@ -2,9 +2,12 @@
 
 import json
 import logging
+import re
 import tempfile
+from datetime import datetime
+from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from rag.ingest import extract_text_from_pdf, semantic_chunk, clean_text, IngestConfig, Chunk
 from rag.embed import get_embedder
@@ -18,6 +21,31 @@ from rag.schemas import RaceBrief, RaceTimeline
 
 logger = logging.getLogger(__name__)
 
+# GP name normalization map: common variations -> canonical name
+GP_NORMALIZATION_MAP = {
+    "australia": "Australian Grand Prix",
+    "aussie": "Australian Grand Prix",
+    "bahrain": "Bahrain Grand Prix",
+    "saudi": "Saudi Arabian Grand Prix",
+    "monaco": "Monaco Grand Prix",
+    "spain": "Spanish Grand Prix",
+    "canada": "Canadian Grand Prix",
+    "austria": "Austrian Grand Prix",
+    "britain": "British Grand Prix",
+    "british": "British Grand Prix",
+    "hungary": "Hungarian Grand Prix",
+    "netherlands": "Dutch Grand Prix",
+    "belgium": "Belgian Grand Prix",
+    "italy": "Italian Grand Prix",
+    "singapore": "Singapore Grand Prix",
+    "japan": "Japanese Grand Prix",
+    "mexico": "Mexico City Grand Prix",
+    "brazil": "Brazilian Grand Prix",
+    "usa": "United States Grand Prix",
+    "united states": "United States Grand Prix",
+    "abu dhabi": "Abu Dhabi Grand Prix",
+}
+
 
 def make_json_serializable(obj: Any) -> Any:
     """Recursively convert objects to JSON-serializable types.
@@ -30,7 +58,13 @@ def make_json_serializable(obj: Any) -> Any:
     """
     if obj is None:
         return None
-    elif isinstance(obj, (str, int, float, bool)):
+    elif isinstance(obj, bool):  # Check bool before int (bool is subclass of int)
+        return obj
+    elif isinstance(obj, Enum):
+        # Check Enum BEFORE str! String enums inherit from str so isinstance(obj, str) would match first
+        # Convert Enum to its value, ensuring we get a pure string
+        return str(obj.value) if isinstance(obj.value, str) else make_json_serializable(obj.value)
+    elif isinstance(obj, (str, int, float)):
         return obj
     elif isinstance(obj, (list, tuple)):
         return [make_json_serializable(item) for item in obj]
@@ -42,6 +76,125 @@ def make_json_serializable(obj: Any) -> Any:
         return make_json_serializable(obj.__dict__)
     else:
         return str(obj)
+
+
+
+def normalize_gp_name(gp_text: str) -> Optional[str]:
+    """Normalize GP name variations to canonical form.
+    
+    Handles:
+    - Case variations
+    - Sponsor prefixes (e.g., "Formula 1 Louis Vuitton Australian Grand Prix")
+    - Common abbreviations (Australia -> Australian Grand Prix)
+    - Partial names (Monaco -> Monaco Grand Prix)
+    
+    Args:
+        gp_text: Raw GP name from document
+        
+    Returns:
+        Canonical GP name or None if not recognized
+    """
+    if not gp_text:
+        return None
+    
+    # Clean: remove extra whitespace, convert to lowercase
+    cleaned = gp_text.lower().strip()
+    
+    # Remove sponsor prefixes (everything before "Grand Prix" in first match)
+    sponsor_pattern = r"^.*?(?=Australian|Bahrain|Saudi|Monaco|Spanish|Canadian|Austrian|British|Hungarian|Dutch|Belgian|Italian|Singapore|Japanese|Mexico|Brazilian|United States|Abu Dhabi)"
+    cleaned = re.sub(sponsor_pattern, "", cleaned).strip()
+    
+    # Direct lookup in normalization map
+    for key, canonical in GP_NORMALIZATION_MAP.items():
+        if key in cleaned or cleaned == key:
+            return canonical
+    
+    # Try to extract GP name from "X Grand Prix" pattern
+    gp_match = re.search(r"(\w+(?:\s+\w+)?)\s+Grand Prix", gp_text, re.IGNORECASE)
+    if gp_match:
+        gp_prefix = gp_match.group(1).lower().strip()
+        # Check again against normalized map
+        for key, canonical in GP_NORMALIZATION_MAP.items():
+            if key in gp_prefix or gp_prefix in key:
+                return canonical
+        # If not in map, construct "X Grand Prix" assuming it's valid
+        return f"{gp_match.group(1)} Grand Prix"
+    
+    return None
+
+
+def extract_metadata_heuristic(filename: str, text_excerpt: str) -> Tuple[Optional[int], Optional[str], Optional[str], str]:
+    """Extract metadata using filename and text heuristics (Stage 1).
+    
+    Fast, reliable extraction without LLM.
+    
+    Args:
+        filename: PDF filename (e.g., "2025_Australian_Grand_Prix.pdf")
+        text_excerpt: First 2000 chars of PDF text
+        
+    Returns:
+        (year, gp_name, session_type, confidence_summary)
+    """
+    year = None
+    gp_name = None
+    session_type = None
+    confidence_notes = []
+    
+    # Extract year from filename (e.g., "2025_Australian")
+    filename_year_match = re.search(r'(\d{4})(?:_|\s)', filename, re.IGNORECASE)
+    if filename_year_match:
+        try:
+            year = int(filename_year_match.group(1))
+            if 2014 <= year <= datetime.now().year + 1:
+                confidence_notes.append(f"Year {year} from filename")
+            else:
+                year = None
+        except (ValueError, TypeError):
+            pass
+    
+    # Extract GP name from filename patterns like "2025_Australian_Grand_Prix" or "Australian GP"
+    # Pattern 1: YYYY_Word_Word_Grand_Prix
+    filename_gp_match = re.search(r'_?(\w+(?:_\w+)?)(?:_Grand_Prix)?\.pdf', filename, re.IGNORECASE)
+    if filename_gp_match:
+        gp_candidate = filename_gp_match.group(1).replace('_', ' ')
+        normalized = normalize_gp_name(gp_candidate)
+        if normalized:
+            gp_name = normalized
+            confidence_notes.append(f"GP '{gp_name}' from filename")
+    
+    # Extract from text patterns
+    # Pattern: "2025 Australian Grand Prix" or "Australian Grand Prix 2025"
+    text_gp_year_match = re.search(r'(\d{4})\s+(\w+(?:\s+\w+)?)\s+Grand\s+Prix', text_excerpt, re.IGNORECASE)
+    if text_gp_year_match:
+        try:
+            text_year = int(text_gp_year_match.group(1))
+            if 2014 <= text_year <= datetime.now().year + 1:
+                if not year:
+                    year = text_year
+                    confidence_notes.append(f"Year {text_year} from text")
+        except (ValueError, TypeError):
+            pass
+        
+        text_gp = text_gp_year_match.group(2)
+        normalized = normalize_gp_name(text_gp)
+        if normalized and not gp_name:
+            gp_name = normalized
+            confidence_notes.append(f"GP '{gp_name}' from text")
+    
+    # Detect session type from text
+    if re.search(r'\brace\b|\bRACE\b', text_excerpt):
+        session_type = "RACE"
+        confidence_notes.append("Session type RACE from text")
+    elif re.search(r'\bqualif|\bQUALIF', text_excerpt):
+        session_type = "QUALIFYING"
+        confidence_notes.append("Session type QUALIFYING from text")
+    elif re.search(r'\bsprint\b|\bSPRINT\b', text_excerpt):
+        session_type = "SPRINT"
+        confidence_notes.append("Session type SPRINT from text")
+    
+    summary = " | ".join(confidence_notes) if confidence_notes else "No filename/text patterns matched"
+    
+    return year, gp_name, session_type, summary
 
 
 class AppService:
@@ -72,8 +225,13 @@ class AppService:
         # Cache ingested documents: doc_id -> (text, chunks, embeddings)
         self.ingested_docs: Dict[str, Dict[str, Any]] = {}
         
+        # Log OpenF1 client type for debugging
+        openf1_client_type = type(self.openf1_client).__name__
+        self.openf1_client_type = openf1_client_type
+        
         fallback_msg = " (FALLBACK: Using MockLLM)" if self.using_ollama_fallback else ""
         logger.info(f"AppService initialized (mock_mode={use_mock}){fallback_msg}")
+        logger.info(f"[OpenF1] Client type: {openf1_client_type}")
 
     def ingest_pdf(self, pdf_path: str, doc_id: str) -> Dict[str, Any]:
         """Ingest a PDF file and store in vector DB.
@@ -118,14 +276,16 @@ class AppService:
             # Store in vector DB
             self.vector_store.add_chunks(chunk_objects, embeddings)
             
-            # Cache
+            # Cache - store filename for heuristic extraction
             self.ingested_docs[doc_id] = {
                 "text": cleaned_text,
+                "raw_text": text[:2000],  # First 2000 chars for heuristic
+                "filename": Path(pdf_path).name,
                 "chunks": [c.model_dump(mode="python") for c in chunk_objects],
                 "num_chunks": len(chunk_objects),
             }
             
-            logger.info(f"Ingested {len(chunk_objects)} chunks for {doc_id}")
+            logger.info(f"Ingested {len(chunk_objects)} chunks for {doc_id} from {Path(pdf_path).name}")
             
             return {
                 "success": True,
@@ -144,6 +304,231 @@ class AppService:
         except Exception as e:
             logger.error(f"Ingestion failed: {e}")
             return {"success": False, "error": f"Ingestion failed: {str(e)}"}
+
+    def extract_race_metadata(self, doc_id: str) -> Dict[str, Any]:
+        """Extract race metadata (year, GP name, session type) using 2-stage approach.
+        
+        Stage 1 (Heuristic): Fast extraction from filename and text patterns
+        Stage 2 (LLM): Fallback to Ollama LLM if heuristic fails
+        
+        Uses the ingested PDF to automatically detect:
+        - F1 season year
+        - Grand Prix name
+        - Session type (RACE, QUALIFYING, SPRINT, etc.)
+        
+        Args:
+            doc_id: Document ID (must be ingested first)
+            
+        Returns:
+            Dict with metadata, detection path, and reasoning
+        """
+        try:
+            if doc_id not in self.ingested_docs:
+                return {
+                    "success": False,
+                    "error": f"Document {doc_id} not ingested. Please ingest PDF first.",
+                }
+            
+            doc_data = self.ingested_docs[doc_id]
+            filename = doc_data.get("filename", "unknown.pdf")
+            raw_text = doc_data.get("raw_text", "")
+            chunks = doc_data.get("chunks", [])
+            
+            logger.info(f"=== METADATA EXTRACTION START for {doc_id} ===")
+            logger.info(f"Filename: {filename}")
+            logger.info(f"Raw text (first 400 chars): {raw_text[:400]}")
+            
+            # ===== STAGE 1: HEURISTIC EXTRACTION =====
+            logger.info("--- Stage 1: Heuristic extraction ---")
+            h_year, h_gp, h_session, h_summary = extract_metadata_heuristic(filename, raw_text)
+            logger.info(f"Heuristic result: year={h_year}, gp={h_gp}, session={h_session}")
+            logger.info(f"Heuristic summary: {h_summary}")
+            
+            # Check if heuristic result is high-confidence
+            heuristic_confident = (h_year is not None and h_gp is not None and h_gp != "Unknown")
+            
+            if heuristic_confident:
+                logger.info("✓ Heuristic extraction successful - using Stage 1 result")
+                return {
+                    "success": True,
+                    "year": h_year,
+                    "gp_name": h_gp,
+                    "session_type": h_session or "RACE",
+                    "message": f"Detected: {h_year} {h_gp} ({h_session or 'RACE'})",
+                    "extraction_path": "heuristic_filename_text",
+                    "reasoning": h_summary,
+                }
+            
+            # ===== STAGE 2: LLM EXTRACTION =====
+            logger.info("--- Stage 2: LLM extraction (heuristic not confident) ---")
+            
+            # Get first few chunks for LLM
+            excerpt_parts = []
+            for chunk in chunks[:10]:
+                if isinstance(chunk, dict):
+                    content = chunk.get("content", "")
+                else:
+                    content = getattr(chunk, "content", "")
+                if content:
+                    excerpt_parts.append(content)
+            
+            doc_excerpt = "\n".join(excerpt_parts)
+            
+            if not doc_excerpt.strip():
+                logger.warning(f"No text content in chunks for {doc_id}, using heuristic fallback")
+                # Fall back to heuristic even if not confident
+                return {
+                    "success": True,
+                    "year": h_year or 2024,
+                    "gp_name": h_gp or "Unknown",
+                    "session_type": h_session or "RACE",
+                    "message": f"Detected: {h_year or 2024} {h_gp or 'Unknown'} ({h_session or 'RACE'})",
+                    "extraction_path": "heuristic_no_chunks",
+                    "reasoning": "No text content in chunks; using heuristic result",
+                }
+            
+            # Build LLM prompt
+            extraction_prompt = f"""Extract race metadata from this F1 race document. Be precise and return ONLY valid JSON.
+
+Document excerpt:
+---
+{doc_excerpt[:1500]}
+---
+
+Extract these three fields:
+1. year: Integer year (2014-2025). Required.
+2. gp_name: Full Grand Prix name (e.g., "Australian Grand Prix", "Monaco Grand Prix"). Required - never "Unknown".
+3. session_type: One of RACE, QUALIFYING, SPRINT, FP1, FP2, FP3. Default to RACE.
+
+Return ONLY this JSON format with no markdown or extra text:
+{{"year": 2025, "gp_name": "Australian Grand Prix", "session_type": "RACE"}}"""
+            
+            logger.info(f"LLM prompt (first 300 chars): {extraction_prompt[:300]}")
+            
+            # Call LLM
+            metadata_json = self.llm.extract_json(extraction_prompt)
+            logger.info(f"Raw LLM response (first 200 chars): {str(metadata_json)[:200]}")
+            
+            # Extract and validate
+            llm_year = metadata_json.get("year") if metadata_json else None
+            llm_gp = metadata_json.get("gp_name") if metadata_json else None
+            llm_session = metadata_json.get("session_type") if metadata_json else None
+            
+            logger.info(f"LLM parsed: year={llm_year}, gp={llm_gp}, session={llm_session}")
+            
+            # Validate LLM result and check against OpenF1 availability
+            year = None
+            if llm_year:
+                try:
+                    year = int(llm_year)
+                    if year < 1950 or year > datetime.now().year + 1:
+                        logger.warning(f"LLM year {year} out of valid range, falling back to heuristic")
+                        year = None
+                    else:
+                        # Check if this year exists in OpenF1 database
+                        try:
+                            logger.info(f"Validating year {year} against OpenF1 database...")
+                            test_sessions = self.openf1_client.search_sessions(year=year)
+                            if not test_sessions:
+                                logger.warning(f"Year {year} has no sessions in OpenF1. Trying fallback years...")
+                                # Try previous years
+                                for fallback_year in [year - 1, year - 2, 2024, 2023]:
+                                    fb_sessions = self.openf1_client.search_sessions(year=fallback_year)
+                                    if fb_sessions:
+                                        logger.warning(f"Found data in year {fallback_year} instead of {year}")
+                                        year = fallback_year
+                                        break
+                                else:
+                                    logger.warning(f"Could not find any year with F1 data")
+                                    year = None
+                            else:
+                                logger.info(f"Year {year} validated - found {len(test_sessions)} sessions")
+                        except Exception as e:
+                            logger.debug(f"Could not validate year against OpenF1: {e}. Continuing with year {year}")
+                except (ValueError, TypeError):
+                    logger.warning(f"LLM year '{llm_year}' not an integer, falling back to heuristic")
+                    year = None
+            
+            gp_name = None
+            if llm_gp:
+                gp_name_str = str(llm_gp).strip()
+                # Reject "Unknown" from LLM
+                if gp_name_str.lower() == "unknown":
+                    logger.warning(f"LLM returned 'Unknown' GP, falling back to heuristic")
+                    gp_name = None
+                else:
+                    # Try to normalize it
+                    normalized = normalize_gp_name(gp_name_str)
+                    if normalized:
+                        gp_name = normalized
+                    elif len(gp_name_str) > 2:
+                        # Accept if it looks reasonable (not "x" or "XY")
+                        gp_name = gp_name_str
+            
+            session_type = None
+            if llm_session:
+                session_type_str = str(llm_session).upper().strip()
+                valid_sessions = ["RACE", "QUALIFYING", "SPRINT", "FP1", "FP2", "FP3"]
+                if session_type_str in valid_sessions:
+                    session_type = session_type_str
+            
+            # Use LLM result if valid, otherwise fall back to heuristic
+            llm_valid = (year is not None and gp_name is not None)
+            
+            if llm_valid:
+                logger.info(f"✓ LLM extraction successful: {year} {gp_name}")
+                return {
+                    "success": True,
+                    "year": year,
+                    "gp_name": gp_name,
+                    "session_type": session_type or "RACE",
+                    "message": f"Detected: {year} {gp_name} ({session_type or 'RACE'})",
+                    "extraction_path": "llm_extraction",
+                    "reasoning": f"Extracted via Ollama LLM",
+                }
+            else:
+                logger.warning(f"LLM result invalid, falling back to heuristic")
+                
+                # Use heuristic even if not fully confident
+                final_year = h_year or 2024
+                final_gp = h_gp or "Unknown"
+                final_session = h_session or "RACE"
+                
+                error_reason = ""
+                if h_year is None and llm_year is None:
+                    error_reason += "Could not extract year from document or LLM. "
+                if h_gp is None and llm_gp is None:
+                    error_reason += "Could not extract GP name from document or LLM. "
+                
+                logger.warning(f"Metadata extraction partial. {error_reason.strip()}")
+                
+                return {
+                    "success": True,  # Partial success - using defaults
+                    "year": final_year,
+                    "gp_name": final_gp,
+                    "session_type": final_session,
+                    "message": f"Detected: {final_year} {final_gp} ({final_session})",
+                    "extraction_path": "heuristic_fallback_after_llm",
+                    "reasoning": f"LLM failed; using heuristic fallback. {error_reason.strip()}",
+                    "warning": "Low confidence detection - manual verification recommended",
+                }
+        
+        except Exception as e:
+            logger.error(f"Metadata extraction exception: {str(e)}")
+            logger.debug(f"Full exception: {e}", exc_info=True)
+            
+            # Fallback to 2024 + Unknown
+            logger.info(f"Using hardcoded fallback metadata due to exception")
+            return {
+                "success": False,
+                "year": 2024,
+                "gp_name": "Unknown",
+                "session_type": "RACE",
+                "message": "Detected: 2024 Unknown (RACE) [extraction failed]",
+                "extraction_path": "exception_fallback",
+                "reasoning": f"Exception during extraction: {str(e)}",
+                "error": f"Metadata extraction failed: {str(e)}",
+            }
 
     def build_brief(
         self,
@@ -420,6 +805,7 @@ For each question, return JSON:
         year: Optional[int] = None,
         gp_name: Optional[str] = None,
         session_type: str = "RACE",
+        auto_extract_metadata: bool = True,
     ) -> Dict[str, Any]:
         """Build race timeline from PDF + OpenF1 data.
         
@@ -428,14 +814,34 @@ For each question, return JSON:
         
         Args:
             doc_id: Document ID
-            year: F1 season year (optional)
-            gp_name: Grand Prix name (optional)
+            year: F1 season year (optional, auto-extracted if not provided)
+            gp_name: Grand Prix name (optional, auto-extracted if not provided)
             session_type: Session type (RACE, QUALI, FP1, FP2, FP3)
+            auto_extract_metadata: If True and year/gp_name not provided, extract from PDF
             
         Returns:
             Dict with success status and timeline data
         """
         try:
+            # Auto-extract metadata if not provided
+            if auto_extract_metadata and (not year or not gp_name):
+                metadata_result = self.extract_race_metadata(doc_id)
+                if not metadata_result.get("success"):
+                    return {
+                        "success": False,
+                        "error": metadata_result.get("error", "Failed to extract metadata"),
+                        "timeline": None,
+                    }
+                
+                # Use extracted values, but allow provided values to override
+                if not year:
+                    year = metadata_result["year"]
+                if not gp_name:
+                    gp_name = metadata_result["gp_name"]
+                # Note: session_type from metadata overrides default only if it was extracted
+                if metadata_result.get("session_type") and session_type == "RACE":
+                    session_type = metadata_result["session_type"]
+            
             # Build session metadata
             session_metadata = {
                 "year": year,
@@ -459,6 +865,9 @@ For each question, return JSON:
                 "timeline": timeline_dict,
                 "event_count": len(race_timeline.timeline_items),
                 "message": f"Built timeline with {len(race_timeline.timeline_items)} events",
+                "metadata": session_metadata,
+                "openf1_client_type": self.openf1_client_type,
+                "debug_info": race_timeline.debug_info,  # Include debug info from timeline
             }
         
         except Exception as e:
@@ -467,4 +876,5 @@ For each question, return JSON:
                 "success": False,
                 "error": str(e),
                 "timeline": None,
+                "openf1_client_type": self.openf1_client_type if hasattr(self, 'openf1_client_type') else "unknown",
             }

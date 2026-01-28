@@ -233,6 +233,10 @@ class RaceTimeline(BaseModel):
         default_factory=list,
         description="All drivers mentioned in timeline"
     )
+    debug_info: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Debug information about timeline construction (OpenF1 session resolution, endpoint counts, etc.)"
+    )
 
 
 class ExtractedEntities(BaseModel):
