@@ -129,14 +129,30 @@ f1_race_intelligence/
 
 ### Installation
 
-```bash
-cd f1_race_intelligence
-pip install -r requirements.txt
-```
+1. **Navigate to the project folder:**
+   ```powershell
+   cd path\to\Text Mining and NLP
+   ```
+
+2. **Activate the virtual environment:**
+   ```powershell
+   .\.venv\Scripts\activate
+   ```
+   
+   > If activation is blocked, run once:
+   > ```powershell
+   > Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
+   > ```
+
+3. **Install dependencies (first run only):**
+   ```powershell
+   python -m pip install -r f1_race_intelligence\requirements.txt
+   ```
 
 ### Running the App
 
-```bash
+```powershell
+cd f1_race_intelligence
 python ui_gradio.py
 ```
 
