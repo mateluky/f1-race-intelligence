@@ -360,6 +360,38 @@ class TimelineBuilder:
             timeline_items.extend(position_items)
             logger.info(f"  > Position changes: {len(position_items)}")
             
+            # Fetch weather changes
+            logger.info("[FETCH] Fetching weather events...")
+            weather_items = self._extract_weather_events(
+                openf1_client, year, gp_name, session_type
+            )
+            timeline_items.extend(weather_items)
+            logger.info(f"  > Weather events: {len(weather_items)}")
+            
+            # Fetch overtakes (from dedicated overtakes endpoint)
+            logger.info("[FETCH] Fetching overtake events...")
+            overtake_items = self._extract_overtake_events(
+                openf1_client, year, gp_name, session_type
+            )
+            timeline_items.extend(overtake_items)
+            logger.info(f"  > Overtake events: {len(overtake_items)}")
+            
+            # Fetch starting grid (pre-race context)
+            logger.info("[FETCH] Fetching starting grid...")
+            grid_items = self._extract_starting_grid(
+                openf1_client, year, gp_name, session_type
+            )
+            timeline_items.extend(grid_items)
+            logger.info(f"  > Starting grid events: {len(grid_items)}")
+            
+            # Fetch session results (post-race context)
+            logger.info("[FETCH] Fetching session results...")
+            result_items = self._extract_session_results(
+                openf1_client, year, gp_name, session_type
+            )
+            timeline_items.extend(result_items)
+            logger.info(f"  > Session result events: {len(result_items)}")
+            
             # Count event types for summary
             event_type_counts = {}
             for item in timeline_items:
@@ -627,7 +659,7 @@ class TimelineBuilder:
                         item = TimelineItem(
                             lap=change_lap,
                             timestamp=None,
-                            event_type=TimelineEventType.PIT_STOP,
+                            event_type=TimelineEventType.STRATEGY,
                             title=f"Stint Change: {driver}",
                             description=f"{driver} changes from {compound_from} to {compound_to} at lap {change_lap}",
                             pdf_citations=[],
@@ -883,7 +915,7 @@ class TimelineBuilder:
         
         # Log deduplication details
         logger.info(f"Merged timeline has {len(sorted_items)} items (dedup details)")
-        for (lap, event_type_str, desc), count in sorted(dedup_counts.items()):
+        for (lap, event_type_str, desc), count in sorted(dedup_counts.items(), key=lambda x: (x[0][0] if x[0][0] is not None else 999999, x[0][1], x[0][2])):
             if count > 1:
                 logger.info(f"  Lap {lap} {event_type_str}: {count} → 1 (collapsed {count-1})")
         return sorted_items
@@ -1067,3 +1099,367 @@ class TimelineBuilder:
         
         logger.info(f"Built race timeline with {len(final_timeline)} items")
         return race_timeline
+
+    def _extract_weather_events(
+        self,
+        openf1_client: Any,
+        year: int,
+        gp_name: str,
+        session_type: str,
+    ) -> List[TimelineItem]:
+        """Extract weather change events (rain, temperature changes).
+        
+        Args:
+            openf1_client: OpenF1 API client
+            year, gp_name, session_type: Session identifiers
+            
+        Returns:
+            List of weather TimelineItems
+        """
+        items = []
+        
+        try:
+            # Check if the client has this method
+            if not hasattr(openf1_client, 'get_weather'):
+                logger.debug("[WEATHER] Client does not support get_weather")
+                return items
+            
+            sessions = openf1_client.search_sessions(year=year, gp_name=gp_name, session_type=session_type)
+            
+            if not sessions:
+                return items
+            
+            session = sessions[0]
+            session_id = session.get("session_id") or session.get("session_key")
+            
+            if not session_id:
+                return items
+            
+            weather_data = openf1_client.get_weather(session_id)
+            
+            if not weather_data:
+                return []
+            
+            # Track significant weather changes (rainfall, big temp changes)
+            previous_rainfall = None
+            previous_track_temp = None
+            
+            for i, reading in enumerate(weather_data):
+                rainfall = reading.get("rainfall", 0)
+                track_temp = reading.get("track_temperature")
+                air_temp = reading.get("air_temperature")
+                
+                # Detect rain start/stop
+                if previous_rainfall is not None and rainfall != previous_rainfall:
+                    if rainfall > 0 and previous_rainfall == 0:
+                        item = TimelineItem(
+                            lap=None,
+                            timestamp=reading.get("date"),
+                            event_type=TimelineEventType.WEATHER,
+                            title="Rain Started",
+                            description=f"Rainfall detected. Track temp: {track_temp}°C, Air temp: {air_temp}°C",
+                            pdf_citations=[],
+                            openf1_evidence=[
+                                OpenF1Evidence(
+                                    evidence_type="weather",
+                                    evidence_id=f"weather_{i}",
+                                    snippet=f"Rain started at {reading.get('date')}",
+                                    payload=reading,
+                                )
+                            ],
+                            impacted_drivers=[],
+                            impact_summary="Weather change may affect tire strategy",
+                            confidence="High",
+                        )
+                        items.append(item)
+                    elif rainfall == 0 and previous_rainfall > 0:
+                        item = TimelineItem(
+                            lap=None,
+                            timestamp=reading.get("date"),
+                            event_type=TimelineEventType.WEATHER,
+                            title="Rain Stopped",
+                            description=f"Rainfall stopped. Track temp: {track_temp}°C, Air temp: {air_temp}°C",
+                            pdf_citations=[],
+                            openf1_evidence=[
+                                OpenF1Evidence(
+                                    evidence_type="weather",
+                                    evidence_id=f"weather_{i}",
+                                    snippet=f"Rain stopped at {reading.get('date')}",
+                                    payload=reading,
+                                )
+                            ],
+                            impacted_drivers=[],
+                            impact_summary="Weather change may affect tire strategy",
+                            confidence="High",
+                        )
+                        items.append(item)
+                
+                previous_rainfall = rainfall
+                previous_track_temp = track_temp
+            
+        except Exception as e:
+            logger.warning(f"Failed to extract weather events: {e}")
+        
+        return items
+
+    def _extract_overtake_events(
+        self,
+        openf1_client: Any,
+        year: int,
+        gp_name: str,
+        session_type: str,
+    ) -> List[TimelineItem]:
+        """Extract overtake events from dedicated endpoint.
+        
+        Args:
+            openf1_client: OpenF1 API client
+            year, gp_name, session_type: Session identifiers
+            
+        Returns:
+            List of overtake TimelineItems
+        """
+        items = []
+        
+        try:
+            # Check if the client has this method
+            if not hasattr(openf1_client, 'get_overtakes'):
+                logger.debug("[OVERTAKES] Client does not support get_overtakes")
+                return items
+            
+            sessions = openf1_client.search_sessions(year=year, gp_name=gp_name, session_type=session_type)
+            
+            if not sessions:
+                return items
+            
+            session = sessions[0]
+            session_id = session.get("session_id") or session.get("session_key")
+            
+            if not session_id:
+                return items
+            
+            overtakes = openf1_client.get_overtakes(session_id)
+            
+            if not overtakes:
+                return []
+            
+            # Get driver info for names
+            drivers_info = {}
+            if hasattr(openf1_client, 'get_drivers'):
+                driver_list = openf1_client.get_drivers(session_id)
+                for d in driver_list:
+                    drivers_info[d.get("driver_number")] = d.get("name_acronym") or d.get("broadcast_name") or f"#{d.get('driver_number')}"
+            
+            for overtake in overtakes:
+                overtaking = overtake.get("overtaking_driver_number")
+                overtaken = overtake.get("overtaken_driver_number")
+                position = overtake.get("position")
+                
+                overtaking_name = drivers_info.get(overtaking, f"#{overtaking}")
+                overtaken_name = drivers_info.get(overtaken, f"#{overtaken}")
+                
+                item = TimelineItem(
+                    lap=None,
+                    timestamp=overtake.get("date"),
+                    event_type=TimelineEventType.OVERTAKE,
+                    title=f"Overtake: {overtaking_name} passes {overtaken_name}",
+                    description=f"{overtaking_name} overtakes {overtaken_name} for P{position}",
+                    pdf_citations=[],
+                    openf1_evidence=[
+                        OpenF1Evidence(
+                            evidence_type="overtake",
+                            evidence_id=f"overtake_{overtaking}_{overtaken}",
+                            snippet=f"{overtaking_name} passes {overtaken_name} for P{position}",
+                            payload=overtake,
+                        )
+                    ],
+                    impacted_drivers=[overtaking_name, overtaken_name],
+                    impact_summary=f"{overtaking_name} gains position; {overtaken_name} loses position",
+                    confidence="High",
+                )
+                items.append(item)
+            
+        except Exception as e:
+            logger.warning(f"Failed to extract overtake events: {e}")
+        
+        return items
+
+    def _extract_starting_grid(
+        self,
+        openf1_client: Any,
+        year: int,
+        gp_name: str,
+        session_type: str,
+    ) -> List[TimelineItem]:
+        """Extract starting grid positions (pre-race context).
+        
+        Args:
+            openf1_client: OpenF1 API client
+            year, gp_name, session_type: Session identifiers
+            
+        Returns:
+            List of starting grid TimelineItems (usually just one summary item)
+        """
+        items = []
+        
+        try:
+            # Check if the client has this method
+            if not hasattr(openf1_client, 'get_starting_grid'):
+                logger.debug("[GRID] Client does not support get_starting_grid")
+                return items
+            
+            sessions = openf1_client.search_sessions(year=year, gp_name=gp_name, session_type=session_type)
+            
+            if not sessions:
+                return items
+            
+            session = sessions[0]
+            session_id = session.get("session_id") or session.get("session_key")
+            
+            if not session_id:
+                return items
+            
+            grid = openf1_client.get_starting_grid(session_id)
+            
+            if not grid:
+                return []
+            
+            # Get driver info for names
+            drivers_info = {}
+            if hasattr(openf1_client, 'get_drivers'):
+                driver_list = openf1_client.get_drivers(session_id)
+                for d in driver_list:
+                    drivers_info[d.get("driver_number")] = d.get("name_acronym") or d.get("broadcast_name") or f"#{d.get('driver_number')}"
+            
+            # Build grid summary
+            grid_sorted = sorted(grid, key=lambda x: x.get("position", 999))
+            top_10 = grid_sorted[:10]
+            
+            grid_description = "Starting Grid:\n"
+            for pos in top_10:
+                driver_num = pos.get("driver_number")
+                driver_name = drivers_info.get(driver_num, f"#{driver_num}")
+                position = pos.get("position")
+                grid_description += f"P{position}: {driver_name}\n"
+            
+            item = TimelineItem(
+                lap=0,
+                timestamp=None,
+                event_type=TimelineEventType.GRID,
+                title="Starting Grid",
+                description=grid_description.strip(),
+                pdf_citations=[],
+                openf1_evidence=[
+                    OpenF1Evidence(
+                        evidence_type="starting_grid",
+                        evidence_id="grid",
+                        snippet=f"Top 3: P1 {drivers_info.get(grid_sorted[0].get('driver_number'), '?')}, "
+                               f"P2 {drivers_info.get(grid_sorted[1].get('driver_number'), '?') if len(grid_sorted) > 1 else '?'}, "
+                               f"P3 {drivers_info.get(grid_sorted[2].get('driver_number'), '?') if len(grid_sorted) > 2 else '?'}",
+                        payload={"grid": grid},
+                    )
+                ],
+                impacted_drivers=[drivers_info.get(p.get("driver_number"), f"#{p.get('driver_number')}") for p in top_10],
+                impact_summary="Pre-race starting positions",
+                confidence="High",
+            )
+            items.append(item)
+            
+        except Exception as e:
+            logger.warning(f"Failed to extract starting grid: {e}")
+        
+        return items
+
+    def _extract_session_results(
+        self,
+        openf1_client: Any,
+        year: int,
+        gp_name: str,
+        session_type: str,
+    ) -> List[TimelineItem]:
+        """Extract session results (final standings).
+        
+        Args:
+            openf1_client: OpenF1 API client
+            year, gp_name, session_type: Session identifiers
+            
+        Returns:
+            List of result TimelineItems
+        """
+        items = []
+        
+        try:
+            # Check if the client has this method
+            if not hasattr(openf1_client, 'get_session_result'):
+                logger.debug("[RESULTS] Client does not support get_session_result")
+                return items
+            
+            sessions = openf1_client.search_sessions(year=year, gp_name=gp_name, session_type=session_type)
+            
+            if not sessions:
+                return items
+            
+            session = sessions[0]
+            session_id = session.get("session_id") or session.get("session_key")
+            
+            if not session_id:
+                return items
+            
+            results = openf1_client.get_session_result(session_id)
+            
+            if not results:
+                return []
+            
+            # Get driver info for names
+            drivers_info = {}
+            if hasattr(openf1_client, 'get_drivers'):
+                driver_list = openf1_client.get_drivers(session_id)
+                for d in driver_list:
+                    drivers_info[d.get("driver_number")] = d.get("name_acronym") or d.get("broadcast_name") or f"#{d.get('driver_number')}"
+            
+            # Build results summary
+            results_sorted = sorted(results, key=lambda x: x.get("position", 999))
+            top_10 = results_sorted[:10]
+            
+            # Check for DNFs
+            dnf_drivers = [r for r in results if r.get("dnf", False)]
+            
+            result_description = "Final Results:\n"
+            for res in top_10:
+                driver_num = res.get("driver_number")
+                driver_name = drivers_info.get(driver_num, f"#{driver_num}")
+                position = res.get("position")
+                gap = res.get("gap_to_leader")
+                
+                gap_str = f"+{gap}s" if gap and gap != 0 else ""
+                dnf_str = " (DNF)" if res.get("dnf") else ""
+                result_description += f"P{position}: {driver_name} {gap_str}{dnf_str}\n"
+            
+            if dnf_drivers:
+                result_description += f"\nDNF: {len(dnf_drivers)} driver(s)"
+            
+            item = TimelineItem(
+                lap=999,  # Put at end of timeline
+                timestamp=None,
+                event_type=TimelineEventType.RESULT,
+                title="Session Results",
+                description=result_description.strip(),
+                pdf_citations=[],
+                openf1_evidence=[
+                    OpenF1Evidence(
+                        evidence_type="session_result",
+                        evidence_id="results",
+                        snippet=f"Winner: {drivers_info.get(results_sorted[0].get('driver_number'), '?')}, "
+                               f"DNFs: {len(dnf_drivers)}",
+                        payload={"results": results},
+                    )
+                ],
+                impacted_drivers=[drivers_info.get(r.get("driver_number"), f"#{r.get('driver_number')}") for r in top_10],
+                impact_summary=f"Final standings with {len(dnf_drivers)} DNF(s)" if dnf_drivers else "Final standings",
+                confidence="High",
+            )
+            items.append(item)
+            
+        except Exception as e:
+            logger.warning(f"Failed to extract session results: {e}")
+        
+        return items

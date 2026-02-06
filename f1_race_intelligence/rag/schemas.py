@@ -177,6 +177,11 @@ class TimelineEventType(str, Enum):
     INCIDENT = "INCIDENT"
     PACE_CHANGE = "PACE"
     INFO = "INFO"
+    STRATEGY = "STRATEGY"
+    OVERTAKE = "OVERTAKE"
+    POSITION = "POSITION"
+    RESULT = "RESULT"
+    GRID = "GRID"
 
 
 class TimelineItem(BaseModel):

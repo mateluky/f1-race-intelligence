@@ -68,6 +68,67 @@ class OpenF1ClientInterface(ABC):
         """Get pit stop data."""
         pass
 
+    def get_drivers(
+        self,
+        session_id: str,
+        driver_number: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Get driver information for a session."""
+        return []
+
+    def get_weather(
+        self,
+        session_id: str,
+    ) -> List[Dict[str, Any]]:
+        """Get weather data for a session."""
+        return []
+
+    def get_position(
+        self,
+        session_id: str,
+        driver_number: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Get position changes throughout a session."""
+        return []
+
+    def get_intervals(
+        self,
+        session_id: str,
+        driver_number: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Get interval/gap data between drivers."""
+        return []
+
+    def get_overtakes(
+        self,
+        session_id: str,
+        driver_number: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Get overtake data."""
+        return []
+
+    def get_team_radio(
+        self,
+        session_id: str,
+        driver_number: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Get team radio communications."""
+        return []
+
+    def get_session_result(
+        self,
+        session_id: str,
+    ) -> List[Dict[str, Any]]:
+        """Get final session results/standings."""
+        return []
+
+    def get_starting_grid(
+        self,
+        session_id: str,
+    ) -> List[Dict[str, Any]]:
+        """Get starting grid positions."""
+        return []
+
 
 class MockOpenF1Client(OpenF1ClientInterface):
     """Mock OpenF1 client for testing and offline mode."""
@@ -183,6 +244,103 @@ class MockOpenF1Client(OpenF1ClientInterface):
                 "tyre_from": "soft",
                 "tyre_to": "hard",
             }
+        ]
+
+    def get_drivers(
+        self,
+        session_id: str,
+        driver_number: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Return mock driver data."""
+        drivers = [
+            {"driver_number": 1, "name_acronym": "VER", "full_name": "Max Verstappen", "team_name": "Red Bull Racing"},
+            {"driver_number": 11, "name_acronym": "PER", "full_name": "Sergio Perez", "team_name": "Red Bull Racing"},
+            {"driver_number": 44, "name_acronym": "HAM", "full_name": "Lewis Hamilton", "team_name": "Mercedes"},
+            {"driver_number": 63, "name_acronym": "RUS", "full_name": "George Russell", "team_name": "Mercedes"},
+        ]
+        if driver_number:
+            return [d for d in drivers if d["driver_number"] == driver_number]
+        return drivers
+
+    def get_weather(
+        self,
+        session_id: str,
+    ) -> List[Dict[str, Any]]:
+        """Return mock weather data."""
+        return [
+            {
+                "session_id": session_id,
+                "air_temperature": 25.5,
+                "track_temperature": 42.0,
+                "humidity": 45,
+                "rainfall": 0,
+                "wind_speed": 3.2,
+                "wind_direction": 180,
+            }
+        ]
+
+    def get_position(
+        self,
+        session_id: str,
+        driver_number: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Return mock position data."""
+        return [
+            {"session_id": session_id, "driver_number": 1, "position": 1},
+            {"session_id": session_id, "driver_number": 11, "position": 2},
+            {"session_id": session_id, "driver_number": 44, "position": 3},
+        ]
+
+    def get_intervals(
+        self,
+        session_id: str,
+        driver_number: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Return mock interval data."""
+        return [
+            {"session_id": session_id, "driver_number": 1, "gap_to_leader": None, "interval": None},
+            {"session_id": session_id, "driver_number": 11, "gap_to_leader": 2.5, "interval": 2.5},
+            {"session_id": session_id, "driver_number": 44, "gap_to_leader": 8.3, "interval": 5.8},
+        ]
+
+    def get_overtakes(
+        self,
+        session_id: str,
+        driver_number: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Return mock overtake data."""
+        return [
+            {"session_id": session_id, "overtaking_driver_number": 44, "overtaken_driver_number": 11, "position": 2},
+        ]
+
+    def get_team_radio(
+        self,
+        session_id: str,
+        driver_number: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Return mock team radio data."""
+        return [
+            {"session_id": session_id, "driver_number": 1, "recording_url": "https://example.com/radio1.mp3"},
+        ]
+
+    def get_session_result(
+        self,
+        session_id: str,
+    ) -> List[Dict[str, Any]]:
+        """Return mock session result data."""
+        return [
+            {"session_id": session_id, "driver_number": 1, "position": 1, "dnf": False, "gap_to_leader": 0},
+            {"session_id": session_id, "driver_number": 11, "position": 2, "dnf": False, "gap_to_leader": 5.2},
+        ]
+
+    def get_starting_grid(
+        self,
+        session_id: str,
+    ) -> List[Dict[str, Any]]:
+        """Return mock starting grid data."""
+        return [
+            {"session_id": session_id, "driver_number": 1, "position": 1, "lap_duration": 76.5},
+            {"session_id": session_id, "driver_number": 11, "position": 2, "lap_duration": 76.8},
         ]
 
 
@@ -466,7 +624,7 @@ class OpenF1Client(OpenF1ClientInterface):
             if driver_number:
                 params["driver_number"] = driver_number
             
-            data = self._request("pit_stops", params)
+            data = self._request("pit", params)
             if isinstance(data, list):
                 return data
             elif isinstance(data, dict) and data:
@@ -476,6 +634,242 @@ class OpenF1Client(OpenF1ClientInterface):
                 return []
         except Exception as e:
             logger.warning(f"Error getting pit stops for {session_id}: {e}")
+            return []
+
+    def get_drivers(
+        self,
+        session_id: str,
+        driver_number: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Get driver information for a session.
+        
+        Args:
+            session_id: Session key
+            driver_number: Optional driver number filter
+            
+        Returns:
+            List of driver dicts with name, team, etc.
+        """
+        try:
+            params = {"session_key": session_id}
+            if driver_number:
+                params["driver_number"] = driver_number
+            
+            data = self._request("drivers", params)
+            if isinstance(data, list):
+                return data
+            elif isinstance(data, dict) and data:
+                return [data]
+            else:
+                logger.debug(f"No drivers for session {session_id}")
+                return []
+        except Exception as e:
+            logger.warning(f"Error getting drivers for {session_id}: {e}")
+            return []
+
+    def get_weather(
+        self,
+        session_id: str,
+    ) -> List[Dict[str, Any]]:
+        """Get weather data for a session.
+        
+        Args:
+            session_id: Session key
+            
+        Returns:
+            List of weather readings (air_temp, track_temp, humidity, rainfall, wind, etc.)
+        """
+        try:
+            params = {"session_key": session_id}
+            
+            data = self._request("weather", params)
+            if isinstance(data, list):
+                return data
+            elif isinstance(data, dict) and data:
+                return [data]
+            else:
+                logger.debug(f"No weather data for session {session_id}")
+                return []
+        except Exception as e:
+            logger.warning(f"Error getting weather for {session_id}: {e}")
+            return []
+
+    def get_position(
+        self,
+        session_id: str,
+        driver_number: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Get position changes throughout a session.
+        
+        Args:
+            session_id: Session key
+            driver_number: Optional driver number filter
+            
+        Returns:
+            List of position records (driver, position, timestamp)
+        """
+        try:
+            params = {"session_key": session_id}
+            if driver_number:
+                params["driver_number"] = driver_number
+            
+            data = self._request("position", params)
+            if isinstance(data, list):
+                return data
+            elif isinstance(data, dict) and data:
+                return [data]
+            else:
+                logger.debug(f"No position data for session {session_id}")
+                return []
+        except Exception as e:
+            logger.warning(f"Error getting position for {session_id}: {e}")
+            return []
+
+    def get_intervals(
+        self,
+        session_id: str,
+        driver_number: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Get interval/gap data between drivers (race only).
+        
+        Args:
+            session_id: Session key
+            driver_number: Optional driver number filter
+            
+        Returns:
+            List of interval records (gap_to_leader, interval to car ahead)
+        """
+        try:
+            params = {"session_key": session_id}
+            if driver_number:
+                params["driver_number"] = driver_number
+            
+            data = self._request("intervals", params)
+            if isinstance(data, list):
+                return data
+            elif isinstance(data, dict) and data:
+                return [data]
+            else:
+                logger.debug(f"No intervals for session {session_id}")
+                return []
+        except Exception as e:
+            logger.warning(f"Error getting intervals for {session_id}: {e}")
+            return []
+
+    def get_overtakes(
+        self,
+        session_id: str,
+        driver_number: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Get overtake data (race only).
+        
+        Args:
+            session_id: Session key
+            driver_number: Optional driver number filter (overtaking driver)
+            
+        Returns:
+            List of overtake records (overtaking_driver, overtaken_driver, position, timestamp)
+        """
+        try:
+            params = {"session_key": session_id}
+            if driver_number:
+                params["overtaking_driver_number"] = driver_number
+            
+            data = self._request("overtakes", params)
+            if isinstance(data, list):
+                return data
+            elif isinstance(data, dict) and data:
+                return [data]
+            else:
+                logger.debug(f"No overtakes for session {session_id}")
+                return []
+        except Exception as e:
+            logger.warning(f"Error getting overtakes for {session_id}: {e}")
+            return []
+
+    def get_team_radio(
+        self,
+        session_id: str,
+        driver_number: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Get team radio communications.
+        
+        Args:
+            session_id: Session key
+            driver_number: Optional driver number filter
+            
+        Returns:
+            List of radio records (driver, timestamp, recording_url)
+        """
+        try:
+            params = {"session_key": session_id}
+            if driver_number:
+                params["driver_number"] = driver_number
+            
+            data = self._request("team_radio", params)
+            if isinstance(data, list):
+                return data
+            elif isinstance(data, dict) and data:
+                return [data]
+            else:
+                logger.debug(f"No team radio for session {session_id}")
+                return []
+        except Exception as e:
+            logger.warning(f"Error getting team radio for {session_id}: {e}")
+            return []
+
+    def get_session_result(
+        self,
+        session_id: str,
+    ) -> List[Dict[str, Any]]:
+        """Get final session results/standings.
+        
+        Args:
+            session_id: Session key
+            
+        Returns:
+            List of result records (position, driver, duration, gap, dnf/dns/dsq status)
+        """
+        try:
+            params = {"session_key": session_id}
+            
+            data = self._request("session_result", params)
+            if isinstance(data, list):
+                return data
+            elif isinstance(data, dict) and data:
+                return [data]
+            else:
+                logger.debug(f"No session results for session {session_id}")
+                return []
+        except Exception as e:
+            logger.warning(f"Error getting session results for {session_id}: {e}")
+            return []
+
+    def get_starting_grid(
+        self,
+        session_id: str,
+    ) -> List[Dict[str, Any]]:
+        """Get starting grid positions.
+        
+        Args:
+            session_id: Session key
+            
+        Returns:
+            List of grid positions (position, driver, qualifying lap time)
+        """
+        try:
+            params = {"session_key": session_id}
+            
+            data = self._request("starting_grid", params)
+            if isinstance(data, list):
+                return data
+            elif isinstance(data, dict) and data:
+                return [data]
+            else:
+                logger.debug(f"No starting grid for session {session_id}")
+                return []
+        except Exception as e:
+            logger.warning(f"Error getting starting grid for {session_id}: {e}")
             return []
 
 
