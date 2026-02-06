@@ -195,11 +195,20 @@ Open `http://localhost:7860` (or the port shown in the terminal).
 
 ## Technology Stack
 
-- **Frontend**: Gradio 6.x with Plotly charts
-- **Backend**: Python with Pydantic schemas
-- **LLM**: Ollama (llama3 model)
-- **Data Sources**: PDF documents + OpenF1 API
-- **Vector Store**: In-memory with sentence embeddings
+| Layer | Technology | Purpose |
+|-------|------------|---------|
+| **Frontend** | Gradio 6.x | Web UI with tabs for upload, timeline, visualization |
+| **Visualization** | Plotly | Interactive timeline charts |
+| **API Server** | FastAPI | MCP (Model Context Protocol) server |
+| **Data Validation** | Pydantic | Schemas for TimelineEvent, EventType, etc. |
+| **LLM Runtime** | Ollama (localhost:11434) | Local LLM inference |
+| **LLM Model** | llama3 | Event extraction & text analysis |
+| **Embeddings** | Sentence Transformers | Text vectorization |
+| **Vector Store** | In-memory | Similarity search & Top-K retrieval |
+| **PDF Parsing** | PyPDF / pdfplumber | Document text extraction & chunking |
+| **External API** | OpenF1 API | Live telemetry, pit stops, race control data |
+| **Caching** | In-memory | Rate limiting & API response caching |
+| **Language** | Python 3.10+ | Core application runtime |
 
 ## License
 
