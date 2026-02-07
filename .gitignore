@@ -1,3 +1,2 @@
-/Attention_Transformer_L4.pdf
-/L1_NLP.pdf
-/L2_NN_RNN_LSTM.pdf
+.venv/
+.venv/**

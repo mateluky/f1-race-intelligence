@@ -141,7 +141,9 @@ f1_race_intelligence/
 
 1. **Python 3.10+**
 2. **Ollama** with `llama3` model:
+In a separte Terminal 
    ```bash
+   brew install ollama
    ollama pull llama3
    ollama serve
    ```
